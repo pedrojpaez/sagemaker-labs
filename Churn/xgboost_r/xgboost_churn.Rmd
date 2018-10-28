@@ -1,0 +1,141 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+```{r}
+library(reticulate)
+sagemaker <- import('sagemaker')
+session <- sagemaker$Session()
+bucket <- session$default_bucket()
+```
+```{r}
+role_arn <- 'arn:aws:iam::349934754982:role/service-role/AmazonSageMaker-ExecutionRole-20180913T235776'
+```
+
+
+```{r}
+system("wget http://dataminingconsultant.com/DKD2e_data_sets.zip")
+system("unzip -o DKD2e_data_sets.zip")
+```
+```{r}
+library(readr)
+churn<- read_csv(file = './Data sets/churn.txt')
+head(churn)
+```
+```{r}
+for (i in colnames(churn)){
+  colnames(churn)[colnames(churn) == i] <- gsub(" ", "", i) 
+}
+colnames(churn)[colnames(churn) == 'Churn?'] <- 'Churn'
+colnames(churn)[colnames(churn) == "Int'lPlan"] <- 'IntlPlan'
+print(colnames(churn))
+```
+
+```{r}
+factor_vars<-c("AreaCode","State","IntlPlan","VMailPlan","Churn")
+for(i in factor_vars) {
+  churn[[i]] <- as.factor(churn[[i]])
+}
+
+summary(churn)
+```
+```{r}
+#install.packages("ggcorrplot")
+library('ggcorrplot')
+corr <- cor(churn[,sapply(churn,is.numeric)])
+ggcorrplot(corr, hc.order = TRUE, type = "lower",
+     outline.col = "white")
+```
+
+
+
+```{r}
+churn[,c('DayCharge', 'EveCharge', 'NightCharge', 'IntlCharge','Phone')] <- list(NULL)
+head(churn)
+```
+```{r}
+library(caret)
+```
+
+
+```{r}
+library('dplyr')
+churn_train <- df_all_combined %>%
+  sample_frac(size = 0.7)
+churn <- anti_join(df_all_combined, churn_train)
+churn_test <- churn%>%
+  sample_frac(size = 0.5)
+churn_valid <- anti_join(churn, churn_test)
+```
+
+
+```{r}
+target<-'Churn'
+train_sparse <- model.matrix(~.,churn_train[, colnames(churn_train) != target])
+test_sparse <- model.matrix(~.,churn_test[, colnames(churn_test) != target])
+valid_sparse <- model.matrix(~.,churn_valid[, colnames(churn_valid) != target])
+```
+
+
+```{r}
+#install.packages("xgboost")
+library(xgboost)
+churn_train[[target]]<-as.numeric(factor(churn_train[[target]]))-1
+dtrain <- xgb.DMatrix(data = train_sparse,label=churn_train[[target]]) 
+churn_test[[target]]<-as.numeric(factor(churn_test[[target]]))-1
+dtest <- xgb.DMatrix(data = test_sparse,label=churn_test[[target]])
+churn_valid[[target]]<-as.numeric(factor(churn_valid[[target]]))-1
+dvalid <- xgb.DMatrix(data = valid_sparse,label=churn_valid[[target]])
+```
+
+
+```{r}
+factor_levels <- lapply(churn_train[, sapply(churn_train, is.factor), drop=FALSE],
+                            function(x) {levels(x)})
+```
+
+
+```{r}
+#install.packages("xgboost")
+library('xgboost')
+```
+xgb <- xgboost(data = data.matrix(X[,-1]), 
+ label = y, 
+ eta = 0.1,
+ max_depth = 15, 
+ nround=25, 
+ subsample = 0.5,
+ colsample_bytree = 0.5,
+ seed = 1,
+ eval_metric = "merror",
+ objective = "multi:softprob",
+ num_class = 12,
+ nthread = 3
+)
+
+```{r}
+params <- list(booster = "gbtree", objective = "binary:logistic", eta=0.3, gamma=0, max_depth=6, min_child_weight=1, subsample=1, colsample_bytree=1)
+xgb1 <- xgb.train (params = params, data = dtrain, nrounds = 80, watchlist=list(val=dtest,train=dtrain), print.every.n = 10, early.stop.round = 10, maximize = F , eval_metric = "error")
+```
+
+
+```{r}
+xgbpred <- predict (xgb1,dtest)
+xgbpred <- ifelse (xgbpred > 0.5,1,0)
+```
+
+```{r}
+#confusion matrix
+library(caret)
+confusionMatrix (as.factor(xgbpred), as.factor(churn_test[[target]]))
+#Accuracy - 86.54%` 
+
+#view variable importance plot
+mat <- xgb.importance (feature_names = colnames(dtrain),model = xgb1)
+xgb.plot.importance (importance_matrix = mat[1:20]) 
+```
+
